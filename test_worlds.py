@@ -115,6 +115,45 @@ class WorldTests(unittest.TestCase):
         self.assertEqual(w.load(self.root/'control.json')['desired'],'completed')
         self.assertEqual(w.load(self.root/'checkpoint.json')['frame'],0)
 
+    def test_replay_error_identifies_salted_hash_and_field(self):
+        path=self.code("def solve(d): return hash('node')")
+        message=w.replay_error(path,{'state':{'amp':1}}, {'state':{'amp':2}})
+        self.assertIn('$.state.amp',message)
+        self.assertIn('hash()',message)
+        self.assertIn('lines [1]',message)
+
+    def test_long_rollout_catches_delayed_invalid_ids(self):
+        source=MOVING.replace("return {'state':s", "return {'state':s")
+        source=source.replace("'id':'a'", "'id':('a' if data['step']<50 else '')")
+        with self.assertRaisesRegex(ValueError, 'step 50'):
+            w.evaluate(self.code(source),{},42,[])
+
+    def test_rollout_budget_prevents_new_execution(self):
+        with patch.object(w,'execute') as execute:
+            with self.assertRaises(TimeoutError):
+                w.probe(self.root/'unused.py',{},42,0,deadline=time.monotonic()-1)
+        execute.assert_not_called()
+
+    def test_first_difference_tracks_nested_lists(self):
+        self.assertIn('$.nodes[0].phase',w.first_difference({'nodes':[{'phase':1}]},{'nodes':[{'phase':2}]}))
+
+    def test_runtime_fault_uses_repair_lane_not_world_redesign(self):
+        captured=[]
+        answer={'choices':[{'finish_reason':'stop','message':{'content':json.dumps({
+            'name':'same','hypothesis':'repair','question':'own','code':MOVING})}}]}
+        class Response:
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def read(self):return json.dumps(answer).encode()
+        def reply(request,**kwargs):captured.append(json.loads(request.data));return Response()
+        with patch.object(w.urllib.request,'urlopen',side_effect=reply):
+            w.proposal({'deadline':time.time()+60,'seed_text':'DO_NOT_REINTRODUCE'},
+                {'code':MOVING,'seed_removed':True,'simulation_error':'Duplicate IDs','last_failed_code':'UNRELATED_REDESIGN'},'')
+        self.assertEqual(captured[0]['temperature'],0.2)
+        self.assertIn('NOT a redesign',captured[0]['messages'][0]['content'])
+        self.assertNotIn('DO_NOT_REINTRODUCE',json.dumps(captured[0]))
+        self.assertNotIn('UNRELATED_REDESIGN',json.dumps(captured[0]))
+
     def test_expired_proposal_does_not_call_model(self):
         with patch.object(w.urllib.request,'urlopen') as model:
             with self.assertRaises(TimeoutError):w.proposal({'deadline':time.time()-1,'seed_text':'birth'}, {},'')
