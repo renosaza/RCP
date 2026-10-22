@@ -81,6 +81,7 @@ async def lifespan(app):
         if state.get("status") == "running":
             save(path, {**state, "status": "interrupted", "finished": time.time()})
     autopilot_boot()
+    world_boot()
     chat_boot()
     try:
         yield
@@ -173,10 +174,11 @@ def health():
             ready = json.load(response).get("status") == "ok"
     except Exception:
         ready = False
-    return {"model_ready": ready, "model": "Gemma 4 12B IT Q4_K_M",
+    return {"model_ready": ready, "model": "Qwen3.8-27B UD-Q4_K_M",
             "engine": "OpenEvolve 0.4.0", "busy": busy(),
-            "active_id": ACTIVE["id"] if ACTIVE.get("kind") != "mission" else None,
-            "active_mission": ACTIVE["id"] if ACTIVE.get("kind") == "mission" else None}
+            "active_id": ACTIVE["id"] if ACTIVE.get("kind") == "classic" else None,
+            "active_mission": ACTIVE["id"] if ACTIVE.get("kind") == "mission" else None,
+            "active_world": ACTIVE["id"] if ACTIVE.get("kind") == "world" else None}
 
 
 @app.get("/api/presets")
@@ -348,3 +350,6 @@ def chat_script():
 
 import chat
 chat.install(sys.modules[__name__])
+
+import worlds
+worlds.install(sys.modules[__name__])
