@@ -107,11 +107,16 @@ def distance(a, b):
     return math.sqrt(sum((x-y)**2 for x,y in zip(a,b))/len(a))
 
 
-def probe(path, state, seed, step, count=8):
+def probe(path, state, seed, step, count=8, deadline=None):
     frames = []
     current = copy.deepcopy(state)
     for i in range(count):
-        frame = execute(path, current, seed, step+i)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError('Validation exceeded its wall-time budget')
+        try:
+            frame = execute(path, current, seed, step+i)
+        except Exception as exc:
+            raise ValueError(f'Rollout failed at step {step+i}: {exc}') from exc
         frames.append(frame); current = frame['state']
     # Rendering text and a tick counter alone do not count as observed dynamics.
     structural = [digest({'nodes': f['view']['nodes'], 'links': f['view'].get('links', [])}) for f in frames]
@@ -131,6 +136,7 @@ def proposal(config, snapshot, feedback):
     context = {'current_name': snapshot.get('name'), 'current_code': snapshot.get('code'),
                'self_chosen_question': snapshot.get('question'),
                'observed': snapshot.get('metrics'), 'runtime_error':snapshot.get('simulation_error'),
+               'last_failed_code_excerpt':(snapshot.get('last_failed_code') or '')[:5000],
                'state_excerpt': packed(snapshot.get('state'))[:4000],
                'view_sample': {'nodes':snapshot.get('view',{}).get('nodes',[])[:16],
                                'links':snapshot.get('view',{}).get('links',[])[:24],
@@ -146,6 +152,13 @@ def proposal(config, snapshot, feedback):
             'Your new solve must accept the current state as well as state=null. '
             'Do not erase persistent state merely to restart a predetermined animation. '
             'Novelty metrics are rough observations, not proof of intelligence or improvement.')
+    mode += ('\nThe sandbox uses isolated Python processes: builtin hash(str) is process-randomized. '
+             'Do not use hash() for deterministic IDs/noise. Use explicit integer IDs or hashlib instead. '
+             'Persist a monotonic next-ID counter; len(nodes) is not a unique ID after deletion. '
+             'Every field added to state/nodes needs migration defaults for the existing world.')
+    if snapshot.get('simulation_error'):
+        mode += ('\nThe CURRENT LIVE WORLD is blocked by runtime_error. Repair this fault first, '
+                 'preserving its existing state. Do not add unrelated new mechanics until it advances again.')
     schema = {'type':'object','properties':{key:{'type':'string'} for key in ('name','hypothesis','question','code')},
               'required':['name','hypothesis','question','code'],'additionalProperties':False}
     remaining = config['deadline']-time.time()
@@ -171,21 +184,53 @@ def proposal(config, snapshot, feedback):
     return result
 
 
-def evaluate(path, snapshot, seed, descriptors):
+def first_difference(left, right, path='$', depth=0):
+    if depth > 10:
+        return path
+    if type(left) is not type(right):
+        return path + ': types differ'
+    if isinstance(left, dict):
+        if set(left) != set(right):
+            return path + ': keys differ'
+        for key in left:
+            if packed(left[key]) != packed(right[key]):
+                return first_difference(left[key], right[key], path + '.' + str(key), depth+1)
+    elif isinstance(left, list):
+        if len(left) != len(right):
+            return path + ': lengths differ'
+        for i, (a, b) in enumerate(zip(left, right)):
+            if packed(a) != packed(b):
+                return first_difference(a, b, path + f'[{i}]', depth+1)
+    return path + ': ' + repr(left)[:120] + ' != ' + repr(right)[:120]
+
+
+def replay_error(path, first, again):
+    message = 'Identical seed/input must replay deterministically. Difference: ' + first_difference(first, again)
+    tree = ast.parse(path.read_text())
+    hashes = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'hash']
+    if hashes:
+        message += '. hash() is called at lines ' + str(hashes) + '; builtin string hashes vary across isolated Python processes. Use explicit integer IDs/hashlib/seeded RNG instead.'
+    return message
+
+
+def evaluate(path, snapshot, seed, descriptors, budget_seconds=30):
+    deadline = time.monotonic() + budget_seconds
     first = execute(path, None, seed, 0)
     again = execute(path, None, seed, 0)
     if packed(first) != packed(again):
-        raise ValueError('Identical seed/input must replay deterministically')
-    metrics, _ = probe(path, first['state'], seed, 1)
-    # A second seed detects fragile births; it is not a semantic correctness proof.
-    other = execute(path, None, seed+113, 0)
-    probe(path, other['state'], seed+113, 1, 4)
-    if snapshot.get('code'):
-        continuity, _ = probe(path, snapshot['state'], seed, snapshot['frame']+1, 5)
-        metrics['continuity_activity'] = continuity['activity']
-    metrics['novelty'] = min((distance(metrics['descriptor'], d) for d in descriptors), default=1.0)
+        raise ValueError(replay_error(path, first, again))
+    metrics, last = probe(path, first['state'], seed, 1, deadline=deadline)
     if metrics['activity'] <= 0:
         raise ValueError('No observable node/link dynamics in the rollout; text-only changes do not count')
+    # Catch delayed birth/death/ID failures before committing an otherwise healthy first frame.
+    probe(path, last['state'], seed, 9, 152, deadline=deadline)
+    metrics['long_rollout_steps'] = 160
+    other = execute(path, None, seed+113, 0)
+    probe(path, other['state'], seed+113, 1, 16, deadline=deadline)
+    if snapshot.get('code'):
+        continuity, _ = probe(path, snapshot['state'], seed, snapshot['frame']+1, 16, deadline=deadline)
+        metrics['continuity_activity'] = continuity['activity']
+    metrics['novelty'] = min((distance(metrics['descriptor'], d) for d in descriptors), default=1.0)
     return metrics, first
 
 
@@ -235,12 +280,14 @@ def worker(job):
             with lock:
                 state.update(phase='imagining',error=None,attempts=state['attempts']+1)
                 snapshot=copy.deepcopy(state); attempt=state['attempts'];save()
+            candidate=None
             try:
                 candidate=proposal(config,snapshot,feedback)
                 if not alive(job,config):break
                 name=f'candidate-{attempt:06d}.py';path=job/name;path.write_text(candidate['code'])
                 with lock:state.update(phase='testing',hypothesis=candidate['hypothesis'][:1200]);save()
-                metrics,birth=evaluate(path,snapshot,config['random_seed'],[x['descriptor'] for x in snapshot.get('archive',[])])
+                metrics,birth=evaluate(path,snapshot,config['random_seed'],[x['descriptor'] for x in snapshot.get('archive',[])],
+                                       budget_seconds=min(30,max(1,config['deadline']-time.time())))
                 changed=digest(candidate['code'])!=digest(snapshot.get('code'))
                 # Some valid variants remain in the archive; diversity is not equivalent to improvement.
                 accepted=changed and (not snapshot.get('code') or metrics['novelty']>=0.012 or attempt%4==0)
@@ -256,7 +303,7 @@ def worker(job):
                                      question=candidate['question'][:1000],state=current['state'],view=current['view'],
                                      version=f'g{attempt:06d}',metrics=metrics,accepted=state['accepted']+1,
                                      seed_removed=True,seed_detached_at=state.get('seed_detached_at',time.time()),
-                                     frame=state['frame']+1,simulation_error=None)
+                                     frame=state['frame']+1,simulation_error=None,last_failed_code=None)
                         branch['version']=state['version']
                         store(job/f'version-{attempt:06d}.json',{**branch,'code':candidate['code'],'state':state['state'],'view':state['view']})
                         event('accepted','Приняты новые законы: '+candidate['hypothesis'][:600],version=state['version'])
@@ -272,6 +319,8 @@ def worker(job):
                 feedback=f'{type(exc).__name__}: {exc}'[:1600];failures+=1
                 with lock:
                     state.update(phase='retry',error=feedback)
+                    if candidate is not None:
+                        state['last_failed_code']=candidate['code'][:8000]
                     event('rejected',feedback,attempt=attempt);save()
             # Retain all selected code and only a short window of rejected proposals.
             with lock: keep={x['code_file'] for x in state.get('archive',[])}|{state.get('code_file')}
@@ -401,3 +450,5 @@ if __name__=='__main__':
     with (job/'worker.lock').open('a') as handle:
         fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
         worker(job)
+
+# WORLD_REPLAY_DIAGNOSTICS
