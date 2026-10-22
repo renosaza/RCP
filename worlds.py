@@ -258,7 +258,7 @@ def worker(job):
                                      seed_removed=True,seed_detached_at=state.get('seed_detached_at',time.time()),
                                      frame=state['frame']+1,simulation_error=None)
                         branch['version']=state['version']
-                        store(job/f'version-{attempt:06d}.json',{**branch,'state':state['state'],'view':state['view']})
+                        store(job/f'version-{attempt:06d}.json',{**branch,'code':candidate['code'],'state':state['state'],'view':state['view']})
                         event('accepted','Приняты новые законы: '+candidate['hypothesis'][:600],version=state['version'])
                     else:
                         event('archived','Вариант жизнеспособен, но мало отличается по наблюдаемым признакам.',attempt=attempt)
