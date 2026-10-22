@@ -87,6 +87,34 @@ class WorldTests(unittest.TestCase):
         from pydantic import ValidationError
         with self.assertRaises(ValidationError):w.WorldRequest(hours=25)
         self.assertEqual(w.WorldRequest().hours,24)
+    def test_entire_followup_payload_omits_original_seed(self):
+        captured=[]
+        answer={'choices':[{'finish_reason':'stop','message':{'content':json.dumps({
+            'name':'new','hypothesis':'changed','question':'next','code':MOVING})}}]}
+        class Response:
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def read(self):return json.dumps(answer).encode()
+        def reply(request,**kwargs):
+            captured.append(json.loads(request.data));return Response()
+        config={'deadline':time.time()+100,'seed_text':'UNIQUE_EXTERNAL_SEED_DO_NOT_REPEAT'}
+        with patch.object(w.urllib.request,'urlopen',side_effect=reply):
+            w.proposal(config,{'seed_removed':True,'code':MOVING,'question':'Own question','state':{'x':1}},'')
+        text=json.dumps(captured[0])
+        self.assertNotIn('UNIQUE_EXTERNAL_SEED_DO_NOT_REPEAT',text)
+        self.assertNotIn('initial_seed',text)
+        self.assertIn('Own question',text)
+        self.assertIn('files',text)
+
+    def test_expired_worker_never_generates_or_ticks(self):
+        w.store(self.root/'config.json',{'deadline':time.time()-1,'seed_text':'birth','random_seed':42})
+        w.store(self.root/'control.json',{'desired':'running'})
+        with patch.object(w,'proposal') as model,patch.object(w,'execute') as execute:
+            w.worker(self.root)
+        model.assert_not_called();execute.assert_not_called()
+        self.assertEqual(w.load(self.root/'control.json')['desired'],'completed')
+        self.assertEqual(w.load(self.root/'checkpoint.json')['frame'],0)
+
     def test_expired_proposal_does_not_call_model(self):
         with patch.object(w.urllib.request,'urlopen') as model:
             with self.assertRaises(TimeoutError):w.proposal({'deadline':time.time()-1,'seed_text':'birth'}, {},'')
