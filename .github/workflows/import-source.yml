@@ -1,0 +1,87 @@
+name: Import verified RCP source
+on:
+  push:
+    branches: [main]
+    paths:
+      - .bootstrap/**
+      - .github/workflows/import-source.yml
+permissions:
+  contents: write
+jobs:
+  import:
+    if: github.repository == 'renosaza/RCP'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+      - name: Verify and unpack reviewed source only
+        run: |
+          python3 - <<'PY'
+          import ast
+          import base64
+          import hashlib
+          import io
+          import json
+          from pathlib import Path, PurePosixPath
+          import tarfile
+
+          root = Path.cwd()
+          bootstrap = root / '.bootstrap'
+          corrections = json.loads((bootstrap / 'corrections.json').read_text())
+          chunks = []
+          for i in range(5):
+              name = f'source-{i:02}.b64'
+              value = (bootstrap / name).read_text().strip()
+              for start, end, replacement in reversed(corrections.get(name, [])):
+                  assert 0 <= start <= end <= len(value)
+                  value = value[:start] + replacement + value[end:]
+              chunks.append(value)
+          archive = base64.b64decode(''.join(chunks), validate=True)
+          assert len(archive) == 41708
+          assert hashlib.sha256(archive).hexdigest() == 'd33e99072fe9393aa827c6bb3d484d6d10dda22f6a6a99baebaaab058ad2e907'
+          allowed = {
+              '.gitignore', '.env.example', 'AGENTS.md', 'README.md',
+              'requirements.txt', 'SOURCE_MANIFEST.json',
+              'deploy/rcp-lab.service.example', 'deploy/model.md',
+              'app.py', 'autopilot.py', 'chat.py', 'evaluator.py', 'runner.py',
+              'presets.json', 'static/index.html', 'static/autopilot.html',
+              'static/chat.js', 'test_lab.py', 'test_autopilot.py',
+              'test_chat.py', 'test_shapes.py', 'test_reliability_v2.py',
+          }
+          with tarfile.open(fileobj=io.BytesIO(archive), mode='r:xz') as tar:
+              members = tar.getmembers()
+              assert len(members) == len(allowed)
+              assert {m.name for m in members} == allowed
+              assert sum(m.size for m in members) < 1000000
+              files = {}
+              for member in members:
+                  path = PurePosixPath(member.name)
+                  assert member.isfile() and not path.is_absolute() and '..' not in path.parts
+                  assert not ({'.git', '.github', '.bootstrap'} & set(path.parts))
+                  files[member.name] = tar.extractfile(member).read()
+          manifest = json.loads(files['SOURCE_MANIFEST.json'])
+          assert set(manifest) == allowed - {'SOURCE_MANIFEST.json'}
+          for name, digest in manifest.items():
+              assert hashlib.sha256(files[name]).hexdigest() == digest, name
+          for name, content in files.items():
+              text = content.decode('utf-8')
+              if name.endswith('.py'):
+                  ast.parse(text, filename=name)
+              target = root / name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(content)
+              target.chmod(0o644)
+          print(f'Imported {len(files)} source files; archive and individual SHA-256 checks passed.')
+          PY
+          node --check static/chat.js
+      - name: Publish source files and remove temporary transport
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -r -- .bootstrap
+          git add -- .gitignore .env.example AGENTS.md README.md requirements.txt SOURCE_MANIFEST.json deploy app.py autopilot.py chat.py evaluator.py runner.py presets.json static test_lab.py test_autopilot.py test_chat.py test_shapes.py test_reliability_v2.py
+          git diff --cached --stat
+          git commit -m 'feat: publish RCP Lab source, sandbox tests and local Gemma 4 profile'
+          git push origin HEAD:main
