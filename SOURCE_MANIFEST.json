@@ -12,12 +12,13 @@
   "presets.json": "05cbed33bf00677e0453d57a3c4b392189e6c0328466d5d236026afea9627007",
   "requirements.txt": "1592d0adaaaa4a2545690bf74791320094d00c3df764e4da597ed60ab26bf439",
   "runner.py": "8faffcf720667c122477854cb3f61d59479666c7e8a0277d02bf090e73d163e7",
-  "static/autopilot.html": "caa03ceb480e1b67e5dabeb5a609f2bb68804fcd1ad694feb1bba7f2e086c15f",
+  "static/autopilot.html": "687a8d37a2a798997bafac8836d82cb5f03079631e658ded737f2cceb56d5dc7",
   "static/chat.js": "750152a778f2ce7f1e44b3de8e86fe15b5a022e0b4077472371fbfd2d6c089f0",
   "static/index.html": "f68192ec29ecbe598ca8b53b3f075bf97e41e97d120396adb180670928fa7c94",
   "test_autopilot.py": "a396e2bb2ef3afc6bd078f26e8b1cefd7a9cbd9553e87ddf5e4c74d197201491",
   "test_chat.py": "c8804f7162826f4396a0e444d9a273a7502dcaa7d55d2ddb5f9b2eaa80bdb7d0",
   "test_lab.py": "af9e877be91732f28ba062ca4fa50e74ebb0fdd27ee474664feae5c37eaf7004",
   "test_reliability_v2.py": "85d56cee22e10895bb561c18c20dc99beb2d879fceb68988e5d934ee1fa6c82b",
-  "test_shapes.py": "6184e8c0d17042493a4719dc3c0dc61afdcf9316a2a8ff1e8a517a049e70ad72"
+  "test_shapes.py": "6184e8c0d17042493a4719dc3c0dc61afdcf9316a2a8ff1e8a517a049e70ad72",
+  "tests/live-status.test.cjs": "252095fa8e7974401abb302c6d93e71542324404c59146ed985ac2c9f659095e"
 }
