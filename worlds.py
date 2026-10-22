@@ -157,14 +157,22 @@ def proposal(config, snapshot, feedback):
              'Persist a monotonic next-ID counter; len(nodes) is not a unique ID after deletion. '
              'Every field added to state/nodes needs migration defaults for the existing world.')
     if snapshot.get('simulation_error'):
-        mode += ('\nThe CURRENT LIVE WORLD is blocked by runtime_error. Repair this fault first, '
-                 'preserving its existing state. Do not add unrelated new mechanics until it advances again.')
+        mode = ('Repair a technical defect in the CURRENT LIVE WORLD. This is NOT a redesign task. '
+                'Return the full current_code with the smallest correction that fixes runtime_error. '
+                'Preserve its laws, update formulas, existing node IDs, data and visual projection. '
+                'Do not invent a different world, change its ontology, or replace its initialization. '
+                'When nodes are deleted, never reuse len(nodes) as a new ID. Initialize a persisted next-ID '
+                'from the maximum existing integer ID plus one when loading old state. '
+                'Do not use builtin hash(str), which varies between isolated Python processes. '
+                'Keep the current self_chosen_question for later exploration. '
+                'After technical recovery, autonomous exploration resumes automatically.')
+        context.pop('last_failed_code_excerpt', None)
     schema = {'type':'object','properties':{key:{'type':'string'} for key in ('name','hypothesis','question','code')},
               'required':['name','hypothesis','question','code'],'additionalProperties':False}
     remaining = config['deadline']-time.time()
     if remaining <= 0:
         raise TimeoutError('Experiment deadline reached')
-    payload = {'model':'rcp-coder','temperature':0.8,'max_tokens':3500,
+    payload = {'model':'rcp-coder','temperature':0.2 if snapshot.get('simulation_error') else 0.8,'max_tokens':3500,
                'chat_template_kwargs':{'enable_thinking':False},
                'response_format':{'type':'json_object','schema':schema},
                'messages':[{'role':'system','content':mode+'\n'+CONTRACT},
