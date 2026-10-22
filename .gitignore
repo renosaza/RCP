@@ -1,0 +1,43 @@
+# Credentials and machine-local settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+
+# Python and development environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Model weights, binaries and caches
+models/
+*.gguf
+*.safetensors
+*.part
+node_modules/
+browser-libs/
+
+# Private runtime data and local evidence
+runtime/
+data/
+runs/
+missions/
+backups/
+private/
+*.log
+verification-*.json
+*evidence.json
+*-ui-*.png
+
+# Local packaging output
+*.tar.gz
+*.zip
+*.bak
+*.before-*
+.DS_Store
